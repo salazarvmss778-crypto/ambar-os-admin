@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from supabase import create_client
 
-st.set_page_config(page_title="AMBAR OS - Admin", layout="wide", page_icon="🔐")
+st.set_page_config(page_title="AMBAR OS - Admin", layout="wide", page_icon="👑")
 
 ADMIN_PASSWORD = "Ambar2026!"
 SUPABASE_URL = "https://rkduzcvvjbnapqmlqoey.supabase.co"
@@ -31,7 +31,7 @@ def cargar_db():
 
 def guardar_row(row):
     supabase = get_supabase()
-    supabase.table("licencias").upsert(row).execute()
+    return supabase.table("licencias").upsert(row).execute()
 
 # --- LOGIN ---
 if "auth" not in st.session_state:
@@ -51,12 +51,12 @@ if not st.session_state.auth:
 # --- APP ---
 st.sidebar.title("AMBAR OS")
 st.sidebar.success("✅ Conectado a Supabase")
-st.sidebar.write(SUPABASE_URL)
+st.sidebar.caption(SUPABASE_URL)
 if st.sidebar.button("Cerrar Sesión"):
     st.session_state.auth = False
     st.rerun()
 
-st.title("👑 AMBAR OS - Panel Central - CONECTADO")
+st.title("👑 AMBAR OS - Panel Central")
 
 db = cargar_db()
 
@@ -66,30 +66,35 @@ col2.metric("Activas", sum(1 for v in db.values() if v.get("activo")))
 col3.metric("Ingresos", f"${sum(v.get('precio',0) or 0 for v in db.values())}")
 col4.metric("Dispositivos", sum(len(v.get("dispositivos",[]) or []) for v in db.values()))
 
+# Control de pestaña activa
+if "tab_active" not in st.session_state:
+    st.session_state.tab_active = 0
+
 tab1, tab2, tab3 = st.tabs(["📋 Licencias", "➕ Crear Licencia", "📊 Analytics"])
 
 with tab1:
     if db:
         df = pd.DataFrame(list(db.values()))
-        st.dataframe(df[["key","cliente","empresa","producto","plan","precio","activo","expira","usos","max_dispositivos"]], use_container_width=True)
+        cols_show = [c for c in ["key","cliente","empresa","producto","plan","precio","activo","expira","usos","max_dispositivos"] if c in df.columns]
+        st.dataframe(df[cols_show], use_container_width=True, hide_index=True)
         st.divider()
-        key_sel = st.selectbox("Selecciona Key para gestionar", list(db.keys()))
+        key_sel = st.selectbox("Selecciona Key para gestionar", list(db.keys()), key="key_sel")
         if key_sel:
             lic = db[key_sel]
             st.json(lic)
-            c1, c2, c3 = st.columns(3)
-            if c1.button("🔒 Pausar / Activar"):
+            c1, c2, c3, c4 = st.columns(4)
+            if c1.button("🔒 Pausar / Activar", key="pause"):
                 lic["activo"] = not lic["activo"]
                 guardar_row(lic)
-                st.success(f"Ahora: {'Activa' if lic['activo'] else 'Pausada'} - DocuExtract se enterará al instante")
+                st.success(f"Ahora: {'Activa' if lic['activo'] else 'Pausada'}")
                 time.sleep(1)
                 st.rerun()
-            if c2.button("🗑️ Eliminar"):
+            if c2.button("🗑️ Eliminar", key="del"):
                 get_supabase().table("licencias").delete().eq("key", key_sel).execute()
                 st.success("Eliminada")
                 time.sleep(1)
                 st.rerun()
-            if c3.button("➕ +30 días"):
+            if c3.button("➕ +30 días", key="ext"):
                 try:
                     nueva = datetime.strptime(lic["expira"], "%Y-%m-%d") + timedelta(days=30)
                 except:
@@ -97,12 +102,32 @@ with tab1:
                 lic["expira"] = nueva.strftime("%Y-%m-%d")
                 guardar_row(lic)
                 st.success(f"Nueva expiración: {lic['expira']}")
+                time.sleep(0.5)
                 st.rerun()
+            if c4.button("📋 Copiar Key", key="copy"):
+                st.code(lic["key"])
     else:
-        st.info("No hay licencias. Crea la primera en 'Crear Licencia'")
+        st.warning("No hay licencias en Supabase. ¿Ejecutaste el SQL para crear la tabla y deshabilitar RLS?")
+        st.code("""create table if not exists licencias (
+  key text primary key,
+  cliente text,
+  email text,
+  empresa text,
+  producto text,
+  plan text,
+  precio int,
+  max_dispositivos int,
+  dispositivos jsonb default '[]'::jsonb,
+  activo boolean default true,
+  fecha_creacion text,
+  expira text,
+  usos int default 0,
+  notas text
+);
+alter table licencias disable row level security;""", language="sql")
 
 with tab2:
-    with st.form("crear"):
+    with st.form("crear", clear_on_submit=True):
         cliente = st.text_input("Nombre Cliente*")
         email = st.text_input("Email")
         empresa = st.text_input("Empresa")
@@ -136,10 +161,16 @@ with tab2:
                     "usos": 0,
                     "notas": notas
                 }
-                guardar_row(nueva)
-                st.success(f"✅ Licencia creada y ya funciona en DocuExtract: {nueva_key}")
-                st.balloons()
-                st.code(f"Key: {nueva_key}\nCliente: {cliente}\nExpira: {expira.strftime('%Y-%m-%d')}")
+                try:
+                    guardar_row(nueva)
+                    st.success(f"✅ Licencia creada: {nueva_key}")
+                    st.balloons()
+                    st.code(f"Key: {nueva_key}\nCliente: {cliente}\nExpira: {expira.strftime('%Y-%m-%d')}")
+                    st.info("Ve a la pestaña 📋 Licencias para verla - recargando en 2s...")
+                    time.sleep(2)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error guardando: {e}. ¿Ejecutaste el SQL en Supabase?")
 
 with tab3:
     if db:
@@ -150,3 +181,5 @@ with tab3:
             st.dataframe(df.sort_values("expira")[["key","cliente","expira","activo"]].head(20))
         except:
             st.dataframe(df)
+    else:
+        st.info("Crea licencias para ver analytics")
